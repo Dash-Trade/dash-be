@@ -31,16 +31,16 @@ router.post('/authorize', async (req: Request, res: Response) => {
     // Initialize provider and relayer wallet
     const RPC_URL = process.env.RPC_URL || 'https://sepolia.base.org';
     const provider = new ethers.JsonRpcProvider(RPC_URL);
-    
+
     const relayerPrivateKey = process.env.RELAY_PRIVATE_KEY;
     if (!relayerPrivateKey) {
       throw new Error('RELAY_PRIVATE_KEY not configured');
     }
-    
+
     const relayerWallet = new ethers.Wallet(relayerPrivateKey, provider);
-    
+
     const tapToTradeExecutorAddress = process.env.TAP_TO_TRADE_EXECUTOR_ADDRESS || '0x841f70066ba831650c4D97BD59cc001c890cf6b6';
-    
+
     // Create contract instance
     const tapToTradeExecutor = new ethers.Contract(
       tapToTradeExecutorAddress,
@@ -53,7 +53,7 @@ router.post('/authorize', async (req: Request, res: Response) => {
     // Verify signature locally before sending to chain
     // IMPORTANT: Use expiresAt from frontend to match signature!
     const expiresAtSeconds = expiresAt ? Math.floor(expiresAt / 1000) : Math.floor(Date.now() / 1000) + duration;
-    
+
     logger.info('🕒 Authorization timing:', {
       expiresAtMs: expiresAt,
       expiresAtSeconds,
@@ -64,14 +64,14 @@ router.post('/authorize', async (req: Request, res: Response) => {
       [
         'Authorize session key ',
         sessionKeyAddress,
-        ' for Tethra Tap-to-Trade until ',
+        ' for Dash Tap-to-Trade until ',
         expiresAtSeconds
       ]
     );
-    
+
     const digest = ethers.hashMessage(ethers.getBytes(messageHash));
     const recoveredSigner = ethers.recoverAddress(digest, authSignature);
-    
+
     if (recoveredSigner.toLowerCase() !== trader.toLowerCase()) {
       logger.error('❌ Invalid signature:', {
         expected: trader,

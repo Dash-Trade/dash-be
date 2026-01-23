@@ -3,8 +3,8 @@ import { Logger } from '../utils/Logger';
 
 /**
  * PriceSignerService
- * 
- * Signs price data for trading on Tethra DEX
+ *
+ * Signs price data for trading on Dash DEX
  * - Uses ECDSA signature (off-chain, no gas needed!)
  * - Only authorized Price Signer wallet can sign
  * - Signatures verified on-chain by MarketExecutor
@@ -25,7 +25,7 @@ export class PriceSignerService {
   private initializeSync(): void {
     try {
       const privateKey = process.env.PRICE_SIGNER_PRIVATE_KEY;
-      
+
       if (!privateKey || privateKey === '0xYOUR_PRIVATE_KEY_HERE') {
         this.logger.warn('⚠️  PRICE_SIGNER_PRIVATE_KEY not configured');
         return;
@@ -58,7 +58,7 @@ export class PriceSignerService {
   async initialize(): Promise<void> {
     try {
       const privateKey = process.env.PRICE_SIGNER_PRIVATE_KEY;
-      
+
       if (!privateKey) {
         throw new Error('PRICE_SIGNER_PRIVATE_KEY not set in environment');
       }

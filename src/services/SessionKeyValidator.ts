@@ -52,20 +52,20 @@ export class SessionKeyValidator {
 
       // 3. Verify session authorization signature
       // IMPORTANT: Must match smart contract abi.encodePacked format
-      // Smart contract: keccak256(abi.encodePacked("Authorize session key ", address, " for Tethra Tap-to-Trade until ", uint256))
+      // Smart contract: keccak256(abi.encodePacked("Authorize session key ", address, " for Dash Tap-to-Trade until ", uint256))
       const expiresAtSeconds = Math.floor(sessionKey.expiresAt / 1000);
-      
+
       // Use solidityPackedKeccak256 to match abi.encodePacked
       const authMessageHash = ethers.solidityPackedKeccak256(
         ['string', 'address', 'string', 'uint256'],
         [
           'Authorize session key ',
           sessionKey.address,
-          ' for Tethra Tap-to-Trade until ',
+          ' for Dash Tap-to-Trade until ',
           expiresAtSeconds
         ]
       );
-      
+
       // Verify using hashMessage + recoverAddress (matches personal_sign behavior)
       const authDigest = ethers.hashMessage(ethers.getBytes(authMessageHash));
       const recoveredAuthSigner = ethers.recoverAddress(authDigest, sessionKey.authSignature);

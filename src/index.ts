@@ -48,8 +48,8 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
 
 async function main() {
   try {
-    logger.info('🚀 Starting Tethra DEX Backend (Pyth Oracle Integration)...');
-    
+    logger.info('🚀 Starting Dash DEX Backend (Pyth Oracle Integration)...');
+
     // Initialize services
     const priceService = new PythPriceService();
     const signerService = new PriceSignerService(); // Auto-initializes in constructor
@@ -88,12 +88,12 @@ async function main() {
     tapToTradeExecutorRef = tapToTradeExecutor; // Store reference for graceful shutdown
     logger.success('✅ Tap-to-Trade Executor started! Monitoring for tap-to-trade orders...');
 
-      // Initialize One Tap Profit Monitor (monitors and settles bets automatically)
-      logger.info('🎰 Initializing One Tap Profit Monitor...');
-      const oneTapProfitMonitor = new OneTapProfitMonitor(priceService, oneTapProfitService);
-      oneTapProfitMonitor.start();
-      oneTapProfitMonitorRef = oneTapProfitMonitor; // Store reference for graceful shutdown
-      logger.success('✅ One Tap Profit Monitor started! Monitoring for bets...');
+    // Initialize One Tap Profit Monitor (monitors and settles bets automatically)
+    logger.info('🎰 Initializing One Tap Profit Monitor...');
+    const oneTapProfitMonitor = new OneTapProfitMonitor(priceService, oneTapProfitService);
+    oneTapProfitMonitor.start();
+    oneTapProfitMonitorRef = oneTapProfitMonitor; // Store reference for graceful shutdown
+    logger.success('✅ One Tap Profit Monitor started! Monitoring for bets...');
 
     // Initialize Position Monitor (auto-liquidation for isolated margin)
     logger.info('🔍 Initializing Position Monitor (Auto-Liquidation)...');
@@ -101,38 +101,38 @@ async function main() {
     positionMonitor.start();
     positionMonitorRef = positionMonitor; // Store reference for graceful shutdown
     logger.success('✅ Position Monitor started! Monitoring for liquidations...');
-    
+
     // Initialize Stability Fund streamer (periodic streamToVault)
     logger.info('dYZ_ Initializing Stability Fund streamer...');
     const stabilityFundStreamer = new StabilityFundStreamer();
     stabilityFundStreamer.start();
     stabilityFundStreamerRef = stabilityFundStreamer;
     logger.success('✅ Stability Fund streamer scheduled (streamToVault cron running)');
-    
+
     // Check Price Signer status
     if (signerService.isInitialized()) {
       logger.success(`✅ Price Signer ready: ${signerService.getSignerAddress()}`);
     } else {
       logger.warn('⚠️  Price Signer not available (signed price endpoints disabled)');
     }
-    
+
     // Check Relay Service status
     const relayBalance = await relayService.getRelayBalance();
     logger.success(`✅ Relay Service ready: ${relayBalance.ethFormatted} ETH`);
     if (parseFloat(relayBalance.ethFormatted) < 0.01) {
       logger.warn('⚠️  Relay wallet has low ETH balance! Please fund for gasless transactions.');
     }
-    
+
     // Create HTTP server for both Express and WebSocket
     const server = http.createServer(app);
-    
+
     // Setup WebSocket Server for real-time price updates
     const wss = new WebSocketServer({ server, path: '/ws/price' });
     logger.info('📡 WebSocket server initialized on /ws/price');
-    
+
     wss.on('connection', (ws) => {
       logger.info('✅ New WebSocket client connected');
-      
+
       // Send current prices immediately on connection
       const currentPrices = priceService.getCurrentPrices();
       if (Object.keys(currentPrices).length > 0) {
@@ -142,16 +142,16 @@ async function main() {
           timestamp: Date.now()
         }));
       }
-      
+
       ws.on('error', (error) => {
         logger.error('WebSocket client error:', error);
       });
-      
+
       ws.on('close', () => {
         logger.info('❌ WebSocket client disconnected');
       });
     });
-    
+
     // Subscribe to price updates and broadcast to all WebSocket clients
     priceService.onPriceUpdate((prices) => {
       const message = JSON.stringify({
@@ -159,7 +159,7 @@ async function main() {
         data: prices,
         timestamp: Date.now()
       });
-      
+
       // Broadcast to all connected clients
       wss.clients.forEach((client) => {
         if (client.readyState === 1) { // OPEN state
@@ -167,12 +167,12 @@ async function main() {
         }
       });
     });
-    
+
     // Setup routes
     app.get('/', (req: Request, res: Response) => {
       res.json({
         success: true,
-        message: 'Tethra DEX Backend - Pyth Oracle Price Service',
+        message: 'Dash DEX Backend - Pyth Oracle Price Service',
         version: '1.0.0',
         endpoints: {
           websocket: '/ws/price',
@@ -213,18 +213,18 @@ async function main() {
         timestamp: Date.now()
       });
     });
-    
+
     app.get('/health', (_req: Request, res: Response) => {
       const healthStatus = priceService.getHealthStatus();
       res.json({
         success: true,
-        service: 'Tethra DEX Backend',
+        service: 'Dash DEX Backend',
         uptime: process.uptime(),
         priceService: healthStatus,
         timestamp: Date.now()
       });
     });
-    
+
     app.use('/api/price', createPriceRoute(priceService, signerService));
     app.use('/api/relay', createRelayRoute(relayService));
     app.use('/api/limit-orders', createLimitOrderRoute(limitOrderService));
@@ -233,11 +233,11 @@ async function main() {
     app.use('/api/tap-to-trade', createTapToTradeRoute(tapToTradeService));
     app.use('/api/one-tap', createOneTapProfitRoute(oneTapProfitService, oneTapProfitMonitor));
     app.use('/api/faucet', createFaucetRoute());
-    
+
     // Session key authorization route (relayer pays gas!)
     const sessionRoutes = require('./routes/sessionRoutes').default;
     app.use('/api/session', sessionRoutes);
-    
+
     // Global error handler
     app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
       logger.error('Unhandled API error:', error);
@@ -247,7 +247,7 @@ async function main() {
         timestamp: Date.now()
       });
     });
-    
+
     // 404 handler
     app.use((req: Request, res: Response) => {
       res.status(404).json({
@@ -256,18 +256,18 @@ async function main() {
         timestamp: Date.now()
       });
     });
-    
+
     // Start server
     server.listen(PORT, () => {
-      logger.success(`🎉 Tethra DEX Backend running on port ${PORT}`);
+      logger.success(`🎉 Dash DEX Backend running on port ${PORT}`);
       logger.info(`📡 WebSocket: ws://localhost:${PORT}/ws/price`);
       logger.info(`🌐 REST API: http://localhost:${PORT}/api/price`);
       logger.info(`💚 Health check: http://localhost:${PORT}/health`);
       logger.info(`🔥 Environment: ${process.env.NODE_ENV || 'development'}`);
     });
-    
+
   } catch (error) {
-    logger.error('Failed to start Tethra DEX Backend:', error);
+    logger.error('Failed to start Dash DEX Backend:', error);
     process.exit(1);
   }
 }
