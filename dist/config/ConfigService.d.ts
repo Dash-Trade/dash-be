@@ -1,0 +1,40 @@
+export declare class ConfigService {
+    readonly PORT: number;
+    readonly NODE_ENV: string;
+    readonly DEBUG: boolean;
+    readonly BACKEND_URL: string;
+    readonly CHAIN_ID: number;
+    readonly NETWORK_NAME: string;
+    readonly RPC_URL: string;
+    readonly PRICE_SIGNER_PRIVATE_KEY: string;
+    readonly RELAY_PRIVATE_KEY: string;
+    readonly USDC_TOKEN_ADDRESS: string;
+    readonly TETHRA_TOKEN_ADDRESS: string;
+    readonly MARKET_EXECUTOR_ADDRESS: string;
+    readonly POSITION_MANAGER_ADDRESS: string;
+    readonly RISK_MANAGER_ADDRESS: string;
+    readonly TREASURY_MANAGER_ADDRESS: string;
+    readonly LIMIT_EXECUTOR_ADDRESS: string;
+    readonly TAP_TO_TRADE_EXECUTOR_ADDRESS: string;
+    readonly ONE_TAP_PROFIT_ADDRESS: string;
+    readonly TETHRA_STAKING_ADDRESS: string;
+    readonly LIQUIDITY_MINING_ADDRESS: string;
+    readonly USDC_PAYMASTER_ADDRESS: string;
+    readonly DEPLOYER_ADDRESS: string;
+    readonly TREASURY_ADDRESS: string;
+    readonly PRICE_SIGNER_ADDRESS: string;
+    constructor();
+    private get;
+    private getRequired;
+    private getNumber;
+    private getNumberRequired;
+    private getBoolean;
+    private validatePrivateKey;
+    private validateAddress;
+    private validateAllAddresses;
+    isProduction(): boolean;
+    isDevelopment(): boolean;
+    getAll(): Record<string, any>;
+}
+export declare const config: ConfigService;
+//# sourceMappingURL=ConfigService.d.ts.map
