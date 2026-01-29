@@ -8,8 +8,14 @@ import {
   CalculateMultiplierRequest,
   OneTapBetStatus,
 } from '../types/oneTapProfit';
+import { CollateralToken } from '../types/collateral';
 
 const logger = new Logger('OneTapProfitRoutes');
+
+const parseCollateralToken = (value?: string): CollateralToken | undefined => {
+  if (!value) return undefined;
+  return value.toUpperCase() === 'IDRX' ? 'IDRX' : 'USDC';
+};
 
 export function createOneTapProfitRoute(
   oneTapService: OneTapProfitService,
@@ -55,7 +61,8 @@ export function createOneTapProfitRoute(
    */
   router.post('/place-bet-with-session', async (req: Request, res: Response) => {
     try {
-      const { trader, symbol, betAmount, targetPrice, targetTime, entryPrice, entryTime, sessionSignature } = req.body;
+      const { trader, symbol, betAmount, targetPrice, targetTime, entryPrice, entryTime, sessionSignature, collateralToken } = req.body;
+      const parsedCollateral = parseCollateralToken(collateralToken);
 
       // Validation
       if (!trader || !symbol || !betAmount || !targetPrice || !sessionSignature) {
@@ -79,6 +86,7 @@ export function createOneTapProfitRoute(
         targetTime,
         entryPrice,
         entryTime,
+        collateralToken: parsedCollateral,
       });
 
       res.json({
@@ -102,8 +110,10 @@ export function createOneTapProfitRoute(
   router.get('/bet/:betId', async (req: Request, res: Response) => {
     try {
       const { betId } = req.params;
+      const { collateralToken } = req.query;
+      const parsedCollateral = parseCollateralToken(collateralToken as string | undefined);
 
-      const bet = await oneTapService.getBet(betId);
+      const bet = await oneTapService.getBet(betId, parsedCollateral);
       if (!bet) {
         return res.status(404).json({
           success: false,
@@ -135,12 +145,14 @@ export function createOneTapProfitRoute(
    */
   router.get('/bets', async (req: Request, res: Response) => {
     try {
-      const { trader, symbol, status } = req.query;
+      const { trader, symbol, status, collateralToken } = req.query;
+      const parsedCollateral = parseCollateralToken(collateralToken as string | undefined);
 
       const bets = await oneTapService.queryBets({
         trader: trader as string | undefined,
         symbol: symbol as string | undefined,
         status: status as OneTapBetStatus | undefined,
+        collateralToken: parsedCollateral,
       });
 
       res.json({
@@ -216,7 +228,9 @@ export function createOneTapProfitRoute(
    */
   router.get('/stats', (req: Request, res: Response) => {
     try {
-      const stats = oneTapService.getStats();
+      const { collateralToken } = req.query;
+      const parsedCollateral = parseCollateralToken(collateralToken as string | undefined);
+      const stats = oneTapService.getStats(parsedCollateral);
 
       res.json({
         success: true,
@@ -238,7 +252,9 @@ export function createOneTapProfitRoute(
   router.get('/status', (req: Request, res: Response) => {
     try {
       const status = oneTapMonitor.getStatus();
-      const contractAddress = oneTapService.getContractAddress();
+      const { collateralToken } = req.query;
+      const parsedCollateral = parseCollateralToken(collateralToken as string | undefined);
+      const contractAddress = oneTapService.getContractAddress(parsedCollateral);
 
       res.json({
         success: true,

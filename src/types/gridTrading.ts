@@ -12,6 +12,7 @@ export interface GridSession {
   isActive: boolean;
   createdAt: number;
   cancelledAt?: number;
+  collateralToken?: string;
 }
 
 export interface GridCell {
@@ -49,6 +50,7 @@ export interface CreateGridSessionRequest {
   gridSizeYPercent: number;
   referenceTime: number;
   referencePrice: string;
+  collateralToken?: string;
 }
 
 export interface CreateGridCellRequest {

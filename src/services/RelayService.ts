@@ -12,6 +12,7 @@ import MarketExecutorABI from '../abis/MarketExecutor.json';
 import PositionManagerABI from '../abis/PositionManager.json';
 import VaultPoolABI from '../abis/VaultPool.json';
 import StabilityFundABI from '../abis/StabilityFund.json';
+import { CollateralToken, DEFAULT_COLLATERAL_TOKEN } from '../types/collateral';
 
 export class RelayService {
   private logger: Logger;
@@ -23,7 +24,13 @@ export class RelayService {
   private PAYMASTER_ADDRESS: string;
   private MARKET_EXECUTOR_ADDRESS: string;
   private LIMIT_EXECUTOR_ADDRESS: string;
+  private LIMIT_EXECUTOR_IDRX_ADDRESS: string;
   private POSITION_MANAGER_ADDRESS: string;
+  private POSITION_MANAGER_IDRX_ADDRESS: string;
+  private STABILITY_FUND_ADDRESS: string;
+  private STABILITY_FUND_IDRX_ADDRESS: string;
+  private VAULT_POOL_ADDRESS: string;
+  private VAULT_POOL_IDRX_ADDRESS: string;
   
   constructor() {
     this.logger = new Logger('RelayService');
@@ -44,6 +51,12 @@ export class RelayService {
     this.MARKET_EXECUTOR_ADDRESS = process.env.MARKET_EXECUTOR_ADDRESS || '';
     this.LIMIT_EXECUTOR_ADDRESS = process.env.LIMIT_EXECUTOR_ADDRESS || '';
     this.POSITION_MANAGER_ADDRESS = process.env.POSITION_MANAGER_ADDRESS || '';
+    this.POSITION_MANAGER_IDRX_ADDRESS = process.env.POSITION_MANAGER_IDRX_ADDRESS || '';
+    this.LIMIT_EXECUTOR_IDRX_ADDRESS = process.env.LIMIT_EXECUTOR_IDRX_ADDRESS || '';
+    this.STABILITY_FUND_ADDRESS = process.env.STABILITY_FUND_ADDRESS || '';
+    this.STABILITY_FUND_IDRX_ADDRESS = process.env.STABILITY_FUND_IDRX_ADDRESS || '';
+    this.VAULT_POOL_ADDRESS = process.env.VAULT_POOL_ADDRESS || '';
+    this.VAULT_POOL_IDRX_ADDRESS = process.env.VAULT_POOL_IDRX_ADDRESS || '';
     
     if (!this.PAYMASTER_ADDRESS || !this.MARKET_EXECUTOR_ADDRESS || !this.LIMIT_EXECUTOR_ADDRESS || !this.POSITION_MANAGER_ADDRESS) {
       throw new Error('Contract addresses not configured');
@@ -71,6 +84,39 @@ export class RelayService {
     this.logger.info('🔄 Relay Service initialized');
     this.logger.info(`   Relay Wallet: ${this.relayWallet.address}`);
   }
+
+  private resolveLimitExecutor(token?: string): string {
+    const normalized = token?.toUpperCase?.() === 'IDRX' ? 'IDRX' : 'USDC';
+    if (normalized === 'IDRX' && this.LIMIT_EXECUTOR_IDRX_ADDRESS) {
+      return this.LIMIT_EXECUTOR_IDRX_ADDRESS;
+    }
+    return this.LIMIT_EXECUTOR_ADDRESS;
+  }
+
+  private resolvePositionManager(token?: string): string {
+    const normalized = token?.toUpperCase?.() === 'IDRX' ? 'IDRX' : 'USDC';
+    if (normalized === 'IDRX' && this.POSITION_MANAGER_IDRX_ADDRESS) {
+      return this.POSITION_MANAGER_IDRX_ADDRESS;
+    }
+    return this.POSITION_MANAGER_ADDRESS;
+  }
+
+  private resolveStabilityFund(token?: string): string {
+    const normalized = token?.toUpperCase?.() === 'IDRX' ? 'IDRX' : 'USDC';
+    if (normalized === 'IDRX' && this.STABILITY_FUND_IDRX_ADDRESS) {
+      return this.STABILITY_FUND_IDRX_ADDRESS;
+    }
+    return this.STABILITY_FUND_ADDRESS;
+  }
+
+  private resolveVaultPool(token?: string): string {
+    const normalized = token?.toUpperCase?.() === 'IDRX' ? 'IDRX' : 'USDC';
+    if (normalized === 'IDRX' && this.VAULT_POOL_IDRX_ADDRESS) {
+      return this.VAULT_POOL_IDRX_ADDRESS;
+    }
+    return this.VAULT_POOL_ADDRESS;
+  }
+
   
   /**
    * Check if user can pay for gas via paymaster
@@ -241,7 +287,8 @@ export class RelayService {
   async closePositionGasless(
     userAddress: string,
     positionId: string,
-    symbol: string
+    symbol: string,
+    collateralToken: CollateralToken = DEFAULT_COLLATERAL_TOKEN
   ): Promise<{ txHash: string }> {
     let attempt = 0;
     const MAX_RETRIES = 3;
@@ -263,13 +310,14 @@ export class RelayService {
         this.logger.info('   Closing via PositionManager + StabilityFund/VaultPool (manual settlement)');
 
         // Contracts (relayer must have EXECUTOR_ROLE on PositionManager and SETTLER_ROLE on StabilityFund/VaultPool)
+        const positionManagerAddress = this.resolvePositionManager(collateralToken);
         const positionManager = new Contract(
-          this.POSITION_MANAGER_ADDRESS,
+          positionManagerAddress,
           PositionManagerABI.abi,
           this.relayWallet
         );
-        const stabilityFundAddress = process.env.STABILITY_FUND_ADDRESS || '';
-        const vaultPoolAddress = process.env.VAULT_POOL_ADDRESS || '';
+        const stabilityFundAddress = this.resolveStabilityFund(collateralToken);
+        const vaultPoolAddress = this.resolveVaultPool(collateralToken);
         if (!stabilityFundAddress) {
           throw new Error('STABILITY_FUND_ADDRESS not configured');
         }
@@ -379,7 +427,8 @@ export class RelayService {
   async cancelOrderGasless(
     userAddress: string,
     orderId: string,
-    userSignature: string
+    userSignature: string,
+    collateralToken: CollateralToken = DEFAULT_COLLATERAL_TOKEN
   ): Promise<{ txHash: string }> {
     let attempt = 0;
     const MAX_RETRIES = 3;
@@ -388,9 +437,10 @@ export class RelayService {
       try {
         this.logger.info(`❌ GASLESS CANCEL (Attempt ${attempt + 1}): Order ${orderId} for ${userAddress}`);
         
+        const executorAddress = this.resolveLimitExecutor(collateralToken);
         // Get user's current nonce
         const limitExecutorContract = new Contract(
-          this.LIMIT_EXECUTOR_ADDRESS,
+          executorAddress,
           ['function getUserCurrentNonce(address) view returns (uint256)'],
           this.provider
         );
@@ -415,7 +465,7 @@ export class RelayService {
         const nonce = await NonceManager.getInstance().getNonce();
 
         const tx = await this.relayWallet.sendTransaction({
-          to: this.LIMIT_EXECUTOR_ADDRESS,
+          to: executorAddress,
           data: data,
           gasLimit: 200000n,
           nonce: nonce

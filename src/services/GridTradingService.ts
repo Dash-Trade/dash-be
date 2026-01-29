@@ -48,6 +48,7 @@ export class GridTradingService {
       referencePrice: params.referencePrice,
       isActive: true,
       createdAt: Date.now(),
+      collateralToken: params.collateralToken,
     };
 
     this.gridSessions.set(id, session);

@@ -10,7 +10,7 @@ type StreamTrigger = 'startup' | 'interval' | 'manual';
  * Runs with the relayer/keeper wallet and is intended to be a long-lived cron job.
  */
 export class StabilityFundStreamer {
-  private readonly logger = new Logger('StabilityFundStreamer');
+  private readonly logger: Logger;
   private readonly provider: ethers.JsonRpcProvider;
   private readonly relayer: ethers.Wallet;
   private readonly stabilityFund: ethers.Contract;
@@ -21,7 +21,9 @@ export class StabilityFundStreamer {
   private isRunning = false;
   private isStreaming = false;
 
-  constructor() {
+  constructor(options?: { stabilityFundAddress?: string; label?: string }) {
+    const loggerLabel = options?.label ? `StabilityFundStreamer:${options.label}` : 'StabilityFundStreamer';
+    this.logger = new Logger(loggerLabel);
     const rpcUrl = process.env.RPC_URL || 'https://sepolia.base.org';
     this.provider = new ethers.JsonRpcProvider(rpcUrl);
 
@@ -31,7 +33,7 @@ export class StabilityFundStreamer {
     }
     this.relayer = new ethers.Wallet(relayerKey, this.provider);
 
-    const stabilityFundAddress = process.env.STABILITY_FUND_ADDRESS;
+    const stabilityFundAddress = options?.stabilityFundAddress || process.env.STABILITY_FUND_ADDRESS;
     if (!stabilityFundAddress) {
       throw new Error('STABILITY_FUND_ADDRESS not configured');
     }
@@ -140,7 +142,7 @@ export class StabilityFundStreamer {
 
       const balance = await this.getStabilityFundBalance();
       if (balance !== null && balance === 0n) {
-        this.logger.info('Skipping streamToVault, StabilityFund USDC balance is zero', {
+        this.logger.info('Skipping streamToVault, StabilityFund collateral balance is zero', {
           trigger,
           balance: balance.toString()
         });
@@ -208,7 +210,7 @@ export class StabilityFundStreamer {
       const balance: bigint = await this.usdcToken.balanceOf(fundAddress);
       return balance;
     } catch (error) {
-      this.logger.warn('Could not read StabilityFund USDC balance', error);
+      this.logger.warn('Could not read StabilityFund collateral balance', error);
       return null;
     }
   }

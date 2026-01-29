@@ -21,6 +21,7 @@ export interface OneTapBet {
   entryPrice: string;         // Price when bet was placed (8 decimals)
   entryTime: number;          // Timestamp when bet was placed (Unix)
   multiplier: number;         // Payout multiplier (basis 100, e.g., 110 = 1.1x)
+  collateralToken?: string;   // USDC or IDRX
   status: OneTapBetStatus;
   settledAt?: number;         // When bet was settled
   settlePrice?: string;       // Price at settlement
@@ -40,6 +41,7 @@ export interface PlaceOneTapBetRequest {
   entryTime: number;
   nonce: string;
   userSignature: string;      // User's signature approving this bet
+  collateralToken?: string;
 }
 
 // For keeper-only execution (gasless, no nonce or signature needed)
@@ -51,6 +53,7 @@ export interface PlaceOneTapBetKeeperRequest {
   targetTime: number;
   entryPrice: string;
   entryTime: number;
+  collateralToken?: string;
 }
 
 export interface SettleOneTapBetRequest {
@@ -64,6 +67,7 @@ export interface GetOneTapBetsQuery {
   trader?: string;
   symbol?: string;
   status?: OneTapBetStatus;
+  collateralToken?: string;
 }
 
 export interface OneTapProfitStats {

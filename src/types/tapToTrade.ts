@@ -6,6 +6,8 @@
  * This saves gas by skipping the "create order on-chain" step.
  */
 
+import { CollateralToken } from './collateral';
+
 export enum TapToTradeOrderStatus {
   PENDING = 'PENDING',       // Waiting for price & time conditions
   NEEDS_RESIGN = 'NEEDS_RESIGN', // Nonce mismatch - needs re-signature from user
@@ -25,9 +27,10 @@ export interface TapToTradeOrder {
   trader: string;                      // User wallet address
   symbol: string;                      // BTC, ETH, etc
   isLong: boolean;                     // true = long, false = short
-  collateral: string;                  // USDC amount (6 decimals)
+  collateral: string;                  // Collateral amount (6 decimals)
   leverage: number;                    // e.g., 10x
   triggerPrice: string;                // Target price (8 decimals)
+  collateralToken?: CollateralToken;   // USDC or IDRX
 
   // Time window (for tap-to-trade mode)
   startTime: number;                   // Unix timestamp - order active from
@@ -72,6 +75,7 @@ export interface CreateTapToTradeOrderRequest {
   endTime: number;
   nonce: string;
   signature: string;
+  collateralToken?: CollateralToken;
   sessionKey?: {
     address: string;
     expiresAt: number;

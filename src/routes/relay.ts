@@ -224,7 +224,7 @@ export function createRelayRoute(relayService: RelayService): Router {
    */
   router.post('/cancel-order', async (req: Request, res: Response) => {
     try {
-      const { userAddress, orderId, signature } = req.body;
+      const { userAddress, orderId, signature, collateralToken } = req.body;
       
       if (!userAddress || !orderId || !signature) {
         return res.status(400).json({
@@ -241,7 +241,8 @@ export function createRelayRoute(relayService: RelayService): Router {
       const result = await relayService.cancelOrderGasless(
         userAddress,
         orderId,
-        signature
+        signature,
+        collateralToken
       );
 
       logger.success(`✅ Order ${orderId} cancelled! TX: ${result.txHash}`);
@@ -274,7 +275,7 @@ export function createRelayRoute(relayService: RelayService): Router {
    */
   router.post('/close-position', async (req: Request, res: Response) => {
     try {
-      const { userAddress, positionId, symbol } = req.body;
+      const { userAddress, positionId, symbol, collateralToken } = req.body;
       
       if (!userAddress || !positionId || !symbol) {
         return res.status(400).json({
@@ -291,7 +292,8 @@ export function createRelayRoute(relayService: RelayService): Router {
       const result = await relayService.closePositionGasless(
         userAddress,
         positionId,
-        symbol
+        symbol,
+        collateralToken
       );
 
       logger.success(`✅ Position ${positionId} closed! TX: ${result.txHash}`);

@@ -10,6 +10,7 @@ import { Logger } from '../utils/Logger';
 import PositionManagerABI from '../abis/PositionManager.json';
 import MarketExecutorABI from '../abis/MarketExecutor.json';
 import RiskManagerABI from '../abis/RiskManager.json';
+import { CollateralToken, DEFAULT_COLLATERAL_TOKEN } from '../types/collateral';
 
 interface Position {
   id: bigint;
@@ -35,9 +36,21 @@ export class PositionMonitor {
   private isRunning: boolean = false;
   private checkInterval: number = 1000;
   private currentPrices: Map<string, { price: bigint; timestamp: number }> = new Map();
+  private collateralToken: CollateralToken;
 
-  constructor(pythPriceService: any) {
-    this.logger = new Logger('PositionMonitor');
+  constructor(
+    pythPriceService: any,
+    options?: {
+      positionManagerAddress?: string;
+      marketExecutorAddress?: string;
+      riskManagerAddress?: string;
+      collateralToken?: CollateralToken;
+      label?: string;
+    }
+  ) {
+    const loggerLabel = options?.label ? `PositionMonitor:${options.label}` : 'PositionMonitor';
+    this.logger = new Logger(loggerLabel);
+    this.collateralToken = options?.collateralToken || DEFAULT_COLLATERAL_TOKEN;
 
     // Initialize provider
     const RPC_URL = process.env.RPC_URL || 'https://sepolia.base.org';
@@ -58,9 +71,12 @@ export class PositionMonitor {
     this.priceSignerWallet = new ethers.Wallet(priceSignerKey);
 
     // Contract addresses
-    const positionManagerAddress = process.env.POSITION_MANAGER_ADDRESS || '';
-    const marketExecutorAddress = process.env.MARKET_EXECUTOR_ADDRESS || '';
-    const riskManagerAddress = process.env.RISK_MANAGER_ADDRESS || '';
+    const positionManagerAddress =
+      options?.positionManagerAddress || process.env.POSITION_MANAGER_ADDRESS || '';
+    const marketExecutorAddress =
+      options?.marketExecutorAddress || process.env.MARKET_EXECUTOR_ADDRESS || '';
+    const riskManagerAddress =
+      options?.riskManagerAddress || process.env.RISK_MANAGER_ADDRESS || '';
 
     if (!positionManagerAddress || !marketExecutorAddress || !riskManagerAddress) {
       throw new Error('Contract addresses not configured');

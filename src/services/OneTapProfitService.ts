@@ -10,6 +10,7 @@ import {
   CalculateMultiplierRequest,
   CalculateMultiplierResponse,
 } from '../types/oneTapProfit';
+import { CollateralToken, DEFAULT_COLLATERAL_TOKEN } from '../types/collateral';
 
 const OneTapProfitABI = [
   'function placeBetMeta(address trader, string symbol, uint256 betAmount, uint256 targetPrice, uint256 targetTime, uint256 entryPrice, uint256 entryTime, bytes userSignature) external returns (uint256)',
@@ -36,6 +37,9 @@ const OneTapProfitABI = [
 export class OneTapProfitService {
   private readonly logger = new Logger('OneTapProfitService');
   private contract: ethers.Contract;
+  private contractAddress: string;
+  private contractIdrx: ethers.Contract;
+  private contractIdrxAddress: string;
   private provider: ethers.Provider;
   private relayer: ethers.Wallet;
 
@@ -55,18 +59,33 @@ export class OneTapProfitService {
     this.relayer = new ethers.Wallet(relayPrivateKey, this.provider);
 
     // Setup contract
-    const contractAddress = process.env.ONE_TAP_PROFIT_ADDRESS;
-    if (!contractAddress) {
+    this.contractAddress = process.env.ONE_TAP_PROFIT_ADDRESS || "";
+    if (!this.contractAddress) {
       throw new Error('ONE_TAP_PROFIT_ADDRESS not set in environment');
     }
 
-    this.contract = new ethers.Contract(contractAddress, OneTapProfitABI, this.relayer);
+    this.contract = new ethers.Contract(this.contractAddress, OneTapProfitABI, this.relayer);
+
+    this.contractIdrxAddress = process.env.ONE_TAP_PROFIT_IDRX_ADDRESS || '';
+    this.contractIdrx = new ethers.Contract(
+      this.contractIdrxAddress || this.contractAddress,
+      OneTapProfitABI,
+      this.relayer
+    );
 
     this.logger.success(`✅ OneTapProfitService initialized`);
-    this.logger.info(`📝 Contract: ${contractAddress}`);
+    this.logger.info(`📝 Contract: ${this.contractAddress}`);
     this.logger.info(`💰 Relayer: ${this.relayer.address}`);
   }
 
+
+  private resolveContract(token: string | CollateralToken = DEFAULT_COLLATERAL_TOKEN) {
+    const normalized = token?.toUpperCase?.() === 'IDRX' ? 'IDRX' : 'USDC';
+    if (normalized === 'IDRX' && this.contractIdrxAddress) {
+      return { contract: this.contractIdrx, address: this.contractIdrxAddress };
+    }
+    return { contract: this.contract, address: this.contractAddress };
+  }
 
   /**
    * Place a bet via keeper (fully gasless for user)
@@ -74,6 +93,8 @@ export class OneTapProfitService {
    */
   async placeBetByKeeper(request: PlaceOneTapBetKeeperRequest): Promise<{ betId: string; txHash: string; }> {
     try {
+      const collateralToken = request.collateralToken || DEFAULT_COLLATERAL_TOKEN;
+      const { contract } = this.resolveContract(collateralToken);
       const GRID_Y_DOLLARS = 0.05; // Same as backend monitor
       const targetPriceNum = parseFloat(request.targetPrice);
       const gridBottomPrice = targetPriceNum - (GRID_Y_DOLLARS / 2);
@@ -112,7 +133,7 @@ export class OneTapProfitService {
       this.logger.info(`   Multiplier: ${(multiplier / 100).toFixed(2)}x (${multiplier} basis)`);
 
       // Place bet on-chain via keeper with pre-calculated multiplier
-      const tx = await this.contract.placeBetByKeeper(
+      const tx = await contract.placeBetByKeeper(
         request.trader,
         request.symbol,
         betAmount,
@@ -129,14 +150,14 @@ export class OneTapProfitService {
       // Extract on-chain betId from event
       const event = receipt.logs.find((log: any) => {
         try {
-          const parsed = this.contract.interface.parseLog(log);
+          const parsed = contract.interface.parseLog(log);
           return parsed?.name === 'BetPlaced';
         } catch {
           return false;
         }
       });
 
-      const parsedEvent = this.contract.interface.parseLog(event);
+      const parsedEvent = contract.interface.parseLog(event);
       const onChainBetId = parsedEvent?.args?.betId?.toString();
 
       // Calculate multiplier
@@ -158,6 +179,7 @@ export class OneTapProfitService {
         entryPrice: request.entryPrice,
         entryTime: request.entryTime,
         multiplier: multiplierResult.multiplier,
+        collateralToken,
         status: OneTapBetStatus.ACTIVE,
         createdAt: Date.now(),
       };
@@ -183,6 +205,8 @@ export class OneTapProfitService {
    */
   async placeBet(request: PlaceOneTapBetRequest): Promise<{ betId: string; txHash: string; }> {
     try {
+      const collateralToken = request.collateralToken || DEFAULT_COLLATERAL_TOKEN;
+      const { contract } = this.resolveContract(collateralToken);
       const GRID_Y_DOLLARS = 0.05; // Same as backend monitor
       const targetPriceNum = parseFloat(request.targetPrice);
       const gridBottomPrice = targetPriceNum - (GRID_Y_DOLLARS / 2);
@@ -211,7 +235,7 @@ export class OneTapProfitService {
       const entryPrice = ethers.parseUnits(entryPriceFixed, 8);
 
       // Place bet on-chain via relayer
-      const tx = await this.contract.placeBetMeta(
+      const tx = await contract.placeBetMeta(
         request.trader,
         request.symbol,
         betAmount,
@@ -228,14 +252,14 @@ export class OneTapProfitService {
       // Extract on-chain betId from event
       const event = receipt.logs.find((log: any) => {
         try {
-          const parsed = this.contract.interface.parseLog(log);
+          const parsed = contract.interface.parseLog(log);
           return parsed?.name === 'BetPlaced';
         } catch {
           return false;
         }
       });
 
-      const parsedEvent = this.contract.interface.parseLog(event);
+      const parsedEvent = contract.interface.parseLog(event);
       const onChainBetId = parsedEvent?.args?.betId?.toString();
 
       // Calculate multiplier
@@ -257,6 +281,7 @@ export class OneTapProfitService {
         entryPrice: request.entryPrice,
         entryTime: request.entryTime,
         multiplier: multiplierResult.multiplier,
+        collateralToken,
         status: OneTapBetStatus.ACTIVE,
         createdAt: Date.now(),
       };
@@ -279,9 +304,10 @@ export class OneTapProfitService {
   /**
    * Sync bet from blockchain to local storage
    */
-  async syncBetFromChain(betId: string): Promise<OneTapBet> {
+  async syncBetFromChain(betId: string, collateralToken: CollateralToken = DEFAULT_COLLATERAL_TOKEN): Promise<OneTapBet> {
     try {
-      const betData = await this.contract.getBet(betId);
+      const { contract } = this.resolveContract(collateralToken);
+      const betData = await contract.getBet(betId);
 
       const bet: OneTapBet = {
         betId: betData.id.toString(),
@@ -293,6 +319,7 @@ export class OneTapProfitService {
         entryPrice: ethers.formatUnits(betData.entryPrice, 8),
         entryTime: Number(betData.entryTime),
         multiplier: Number(betData.multiplier),
+        collateralToken,
         status: this.mapStatus(Number(betData.status)),
         settledAt: betData.settledAt > 0 ? Number(betData.settledAt) : undefined,
         settlePrice: betData.settlePrice > 0 ? ethers.formatUnits(betData.settlePrice, 8) : undefined,
@@ -319,7 +346,10 @@ export class OneTapProfitService {
   /**
    * Get bet by ID (from memory or fetch from chain)
    */
-  async getBet(betId: string): Promise<OneTapBet | null> {
+  async getBet(
+    betId: string,
+    collateralToken: CollateralToken = DEFAULT_COLLATERAL_TOKEN
+  ): Promise<OneTapBet | null> {
     // Check memory first
     const cachedBet = this.bets.get(betId);
     if (cachedBet) {
@@ -328,7 +358,7 @@ export class OneTapProfitService {
 
     // Fetch from chain
     try {
-      return await this.syncBetFromChain(betId);
+      return await this.syncBetFromChain(betId, collateralToken);
     } catch (error) {
       this.logger.error(`Failed to get bet ${betId}:`, error);
       return null;
@@ -356,6 +386,10 @@ export class OneTapProfitService {
     // Filter by status
     if (query.status) {
       bets = bets.filter(b => b.status === query.status);
+    }
+
+    if (query.collateralToken) {
+      bets = bets.filter(b => b.collateralToken === query.collateralToken);
     }
 
     return bets.sort((a, b) => b.createdAt - a.createdAt);
@@ -408,8 +442,10 @@ export class OneTapProfitService {
   /**
    * Get statistics
    */
-  getStats(): OneTapProfitStats {
-    const bets = Array.from(this.bets.values());
+  getStats(collateralToken?: CollateralToken): OneTapProfitStats {
+    const bets = Array.from(this.bets.values()).filter((bet) =>
+      collateralToken ? bet.collateralToken === collateralToken : true
+    );
 
     return {
       totalBets: bets.length,
@@ -424,8 +460,8 @@ export class OneTapProfitService {
   /**
    * Get contract address
    */
-  getContractAddress(): string {
-    return this.contract.target as string;
+  getContractAddress(token: CollateralToken = DEFAULT_COLLATERAL_TOKEN): string {
+    return this.resolveContract(token).address;
   }
 
   /**
@@ -440,6 +476,10 @@ export class OneTapProfitService {
         throw new Error('Bet not found in memory');
       }
 
+      const { contract } = this.resolveContract(
+        (bet.collateralToken as CollateralToken) || DEFAULT_COLLATERAL_TOKEN
+      );
+
       this.logger.info(`🔄 Settling bet ${betId}... (${won ? 'WON' : 'LOST'})`);
 
       // Fix floating point precision - round to 8 decimals
@@ -447,7 +487,7 @@ export class OneTapProfitService {
       const priceInUnits = ethers.parseUnits(currentPriceFixed, 8);
 
       // Settle bet on-chain
-      const tx = await this.contract.settleBet(
+      const tx = await contract.settleBet(
         betId,
         priceInUnits,
         currentTime,

@@ -13,6 +13,7 @@ import { Logger } from '../utils/Logger';
 import TapToTradeExecutorABI from '../abis/TapToTradeExecutor.json';
 import { TapToTradeService } from './TapToTradeService';
 import { TapToTradeOrder, TapToTradeOrderStatus } from '../types/tapToTrade';
+import { CollateralToken, DEFAULT_COLLATERAL_TOKEN } from '../types/collateral';
 
 export class TapToTradeExecutor {
   private logger: Logger;
@@ -20,6 +21,8 @@ export class TapToTradeExecutor {
   private keeperWallet: ethers.Wallet;
   private tapToTradeExecutor: Contract;
   private tapToTradeExecutorAddress: string;
+  private tapToTradeExecutorIdrx: Contract;
+  private tapToTradeExecutorIdrxAddress: string;
   private priceSignerWallet: ethers.Wallet;
   private priceSignerAddress: string;
   private tapToTradeService: TapToTradeService;
@@ -64,6 +67,14 @@ export class TapToTradeExecutor {
       this.keeperWallet
     );
 
+    this.tapToTradeExecutorIdrxAddress = process.env.TAP_TO_TRADE_EXECUTOR_IDRX_ADDRESS || '';
+    this.tapToTradeExecutorIdrx = new Contract(
+      this.tapToTradeExecutorIdrxAddress || this.tapToTradeExecutorAddress,
+      TapToTradeExecutorABI.abi,
+      this.keeperWallet
+    );
+
+
     // Subscribe to Pyth price updates
     if (pythPriceService) {
       pythPriceService.onPriceUpdate((prices: any) => {
@@ -93,6 +104,22 @@ export class TapToTradeExecutor {
     this.logger.info(`   Keeper: ${this.keeperWallet.address}`);
     this.logger.info(`   Price Signer: ${this.priceSignerAddress}`);
     this.logger.info(`   TapToTradeExecutor: ${this.tapToTradeExecutorAddress}`);
+    if (this.tapToTradeExecutorIdrxAddress) {
+      this.logger.info(`   TapToTradeExecutor (IDRX): ${this.tapToTradeExecutorIdrxAddress}`);
+    }
+  }
+
+  private resolveExecutor(token: CollateralToken = DEFAULT_COLLATERAL_TOKEN) {
+    if (token === 'IDRX' && this.tapToTradeExecutorIdrxAddress) {
+      return {
+        contract: this.tapToTradeExecutorIdrx,
+        address: this.tapToTradeExecutorIdrxAddress,
+      };
+    }
+    return {
+      contract: this.tapToTradeExecutor,
+      address: this.tapToTradeExecutorAddress,
+    };
   }
 
   /**
@@ -231,6 +258,9 @@ export class TapToTradeExecutor {
       // Mark as executing
       this.tapToTradeService.markAsExecuting(order.id);
 
+      const { contract: tapToTradeExecutor, address: tapToTradeExecutorAddress } =
+        this.resolveExecutor((order.collateralToken as CollateralToken) || DEFAULT_COLLATERAL_TOKEN);
+
       // Sign price (subtract 60 seconds to avoid "Price in future" error)
       const timestamp = Math.floor(Date.now() / 1000) - 60;
       const signedPrice = await this.signPrice(order.symbol, currentPrice, timestamp);
@@ -260,11 +290,11 @@ export class TapToTradeExecutor {
       this.logger.info('User signature details:', {
         signature: order.signature,
         signatureLength: order.signature.length,
-        contractAddress: this.tapToTradeExecutorAddress,
+        contractAddress: tapToTradeExecutorAddress,
       });
       
       // CHECK: Validate nonce before execution
-      const currentNonceOnChain = await this.tapToTradeExecutor.metaNonces(order.trader);
+      const currentNonceOnChain = await tapToTradeExecutor.metaNonces(order.trader);
       this.logger.info('Nonce validation:', {
         orderNonce: order.nonce,
         currentNonceOnChain: currentNonceOnChain.toString(),
@@ -292,7 +322,7 @@ export class TapToTradeExecutor {
           BigInt(order.collateral),
           BigInt(order.leverage),
           BigInt(order.nonce),
-          this.tapToTradeExecutorAddress
+          tapToTradeExecutorAddress
         ]
       );
       this.logger.info('Expected message hash for signature:', expectedMessageHash);
@@ -339,7 +369,7 @@ export class TapToTradeExecutor {
         this.logger.info('⚡ Backend validated session signature off-chain, keeper executes without on-chain verification');
         
         // Call executeTapToTradeByKeeper - no signature parameter needed!
-        tx = await this.tapToTradeExecutor.executeTapToTradeByKeeper(
+        tx = await tapToTradeExecutor.executeTapToTradeByKeeper(
           order.trader,
           order.symbol,
           order.isLong,
@@ -354,7 +384,7 @@ export class TapToTradeExecutor {
         // Traditional flow - user signature verified on-chain
         this.logger.info('📝 Order has traditional signature - using meta-transaction flow');
         
-        tx = await this.tapToTradeExecutor.executeTapToTrade(
+        tx = await tapToTradeExecutor.executeTapToTrade(
           order.trader,
           order.symbol,
           order.isLong,
@@ -374,7 +404,7 @@ export class TapToTradeExecutor {
       let positionId = '0';
       for (const log of receipt.logs) {
         try {
-          const parsed = this.tapToTradeExecutor.interface.parseLog({
+          const parsed = tapToTradeExecutor.interface.parseLog({
             topics: log.topics as string[],
             data: log.data,
           });

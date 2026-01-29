@@ -1,6 +1,7 @@
 import { ethers, Contract } from 'ethers';
 import { Logger } from '../utils/Logger';
 import LimitExecutorArtifact from '../abis/LimitExecutor.json';
+import { CollateralToken, DEFAULT_COLLATERAL_TOKEN } from '../types/collateral';
 
 export interface KeeperLimitOpenOrderRequest {
   trader: string;
@@ -12,6 +13,7 @@ export interface KeeperLimitOpenOrderRequest {
   nonce: string;
   expiresAt: string;
   signature: string;
+  collateralToken?: CollateralToken;
   takeProfit?: string; // optional TP price (8 decimals)
   stopLoss?: string; // optional SL price (8 decimals)
   metadata?: {
@@ -31,6 +33,8 @@ export class LimitOrderService {
   private readonly keeperWallet: ethers.Wallet;
   private readonly limitExecutor: Contract;
   private readonly limitExecutorAddress: string;
+  private readonly limitExecutorIdrx: Contract;
+  private readonly limitExecutorIdrxAddress: string;
   // Store TP/SL preferences for pending limit orders
   private orderTPSLMap: Map<string, { takeProfit?: bigint; stopLoss?: bigint }> = new Map();
 
@@ -57,9 +61,19 @@ export class LimitOrderService {
       this.keeperWallet
     );
 
+    this.limitExecutorIdrxAddress = process.env.LIMIT_EXECUTOR_IDRX_ADDRESS || '';
+    this.limitExecutorIdrx = new Contract(
+      this.limitExecutorIdrxAddress || this.limitExecutorAddress,
+      (LimitExecutorArtifact as { abi: any }).abi,
+      this.keeperWallet
+    );
+
     this.logger.info('🔄 LimitOrderService initialized');
     this.logger.info(`   Keeper wallet: ${this.keeperWallet.address}`);
     this.logger.info(`   LimitExecutor: ${this.limitExecutorAddress}`);
+    if (this.limitExecutorIdrxAddress) {
+      this.logger.info(`   LimitExecutor (IDRX): ${this.limitExecutorIdrxAddress}`);
+    }
   }
 
   private normalizeBigNumberish(value: string, label: string): bigint {
@@ -70,8 +84,16 @@ export class LimitOrderService {
     }
   }
 
-  async getNextOrderId(): Promise<bigint> {
-    const nextId = await this.limitExecutor.nextOrderId();
+  private resolveExecutor(token: CollateralToken = DEFAULT_COLLATERAL_TOKEN): Contract {
+    if (token === 'IDRX' && this.limitExecutorIdrxAddress) {
+      return this.limitExecutorIdrx;
+    }
+    return this.limitExecutor;
+  }
+
+  async getNextOrderId(token: CollateralToken = DEFAULT_COLLATERAL_TOKEN): Promise<bigint> {
+    const executor = this.resolveExecutor(token);
+    const nextId = await executor.nextOrderId();
     return BigInt(nextId);
   }
 
@@ -88,6 +110,8 @@ export class LimitOrderService {
       signature,
       metadata,
     } = request;
+
+    const collateralToken = request.collateralToken || DEFAULT_COLLATERAL_TOKEN;
 
     this.logger.info(`📝 Received limit order request`, {
       trader,
@@ -111,7 +135,7 @@ export class LimitOrderService {
       throw new Error('Invalid signature');
     }
 
-    const nextOrderId = await this.getNextOrderId();
+    const nextOrderId = await this.getNextOrderId(collateralToken);
     this.logger.info(`➡️  Next order id: ${nextOrderId.toString()}`);
 
     // Store TP/SL preferences if provided
@@ -123,14 +147,14 @@ export class LimitOrderService {
       if (request.stopLoss) {
         tpslData.stopLoss = this.normalizeBigNumberish(request.stopLoss, 'stopLoss');
       }
-      this.orderTPSLMap.set(nextOrderId.toString(), tpslData);
+      this.orderTPSLMap.set(`${collateralToken}:${nextOrderId.toString()}`, tpslData);
       this.logger.info(`💾 Stored TP/SL for order ${nextOrderId}:`, {
         takeProfit: request.takeProfit,
         stopLoss: request.stopLoss,
       });
     }
 
-    const tx = await this.limitExecutor.createLimitOpenOrder(
+    const tx = await this.resolveExecutor(collateralToken).createLimitOpenOrder(
       trader,
       symbol,
       isLong,
@@ -162,14 +186,17 @@ export class LimitOrderService {
   /**
    * Get stored TP/SL for a limit order
    */
-  getOrderTPSL(orderId: string): { takeProfit?: bigint; stopLoss?: bigint } | undefined {
-    return this.orderTPSLMap.get(orderId);
+  getOrderTPSL(
+    orderId: string,
+    collateralToken: CollateralToken = DEFAULT_COLLATERAL_TOKEN,
+  ): { takeProfit?: bigint; stopLoss?: bigint } | undefined {
+    return this.orderTPSLMap.get(`${collateralToken}:${orderId}`);
   }
 
   /**
    * Remove TP/SL data after order is executed or cancelled
    */
-  clearOrderTPSL(orderId: string): void {
-    this.orderTPSLMap.delete(orderId);
+  clearOrderTPSL(orderId: string, collateralToken: CollateralToken = DEFAULT_COLLATERAL_TOKEN): void {
+    this.orderTPSLMap.delete(`${collateralToken}:${orderId}`);
   }
 }

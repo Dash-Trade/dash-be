@@ -58,6 +58,7 @@ async function main() {
     const gridTradingService = new GridTradingService(); // Grid trading in-memory storage
     const tapToTradeService = new TapToTradeService(); // Tap-to-trade backend-only orders
     const oneTapProfitService = new OneTapProfitService(); // One Tap Profit betting system
+    let tpslMonitorIdrx: TPSLMonitor | null = null;
 
     // Wait for Pyth price service to initialize
     await priceService.initialize();
@@ -68,6 +69,27 @@ async function main() {
     tpslMonitor.start();
     tpslMonitorRef = tpslMonitor; // Store reference for graceful shutdown
     logger.success('✅ TP/SL Monitor started! Ready to execute TP/SL orders...');
+
+    if (
+      process.env.POSITION_MANAGER_IDRX_ADDRESS &&
+      process.env.MARKET_EXECUTOR_IDRX_ADDRESS &&
+      process.env.STABILITY_FUND_IDRX_ADDRESS &&
+      process.env.VAULT_POOL_IDRX_ADDRESS
+    ) {
+      logger.info('?? Initializing TP/SL Monitor (IDRX)...');
+      const tpslMonitorIdrxInstance = new TPSLMonitor(priceService, {
+        positionManagerAddress: process.env.POSITION_MANAGER_IDRX_ADDRESS,
+        marketExecutorAddress: process.env.MARKET_EXECUTOR_IDRX_ADDRESS,
+        stabilityFundAddress: process.env.STABILITY_FUND_IDRX_ADDRESS,
+        vaultPoolAddress: process.env.VAULT_POOL_IDRX_ADDRESS,
+        collateralToken: 'IDRX',
+        label: 'IDRX',
+      });
+      tpslMonitorIdrxInstance.start();
+      tpslMonitorIdrxRef = tpslMonitorIdrxInstance;
+      tpslMonitorIdrx = tpslMonitorIdrxInstance;
+      logger.success('? TP/SL Monitor (IDRX) started! Ready to execute TP/SL orders...');
+    }
 
     // Initialize Limit Order Executor (monitors and auto-executes orders)
     logger.info('🤖 Initializing Limit Order Executor...');
@@ -80,6 +102,25 @@ async function main() {
     limitOrderExecutor.start();
     limitOrderExecutorRef = limitOrderExecutor; // Store reference for graceful shutdown
     logger.success('✅ Limit Order Executor started! Monitoring for orders...');
+
+    if (process.env.LIMIT_EXECUTOR_IDRX_ADDRESS && process.env.POSITION_MANAGER_IDRX_ADDRESS) {
+      logger.info('?? Initializing Limit Order Executor (IDRX)...');
+      const limitOrderExecutorIdrxInstance = new LimitOrderExecutor(
+        priceService,
+        gridTradingService,
+        tpslMonitorIdrx || tpslMonitor,
+        limitOrderService,
+        {
+          limitExecutorAddress: process.env.LIMIT_EXECUTOR_IDRX_ADDRESS,
+          positionManagerAddress: process.env.POSITION_MANAGER_IDRX_ADDRESS,
+          collateralToken: 'IDRX',
+          label: 'IDRX',
+        }
+      );
+      limitOrderExecutorIdrxInstance.start();
+      limitOrderExecutorIdrxRef = limitOrderExecutorIdrxInstance;
+      logger.success('? Limit Order Executor (IDRX) started! Monitoring for orders...');
+    }
 
     // Initialize Tap-to-Trade Executor (monitors backend-only orders and executes directly)
     logger.info('🎯 Initializing Tap-to-Trade Executor...');
@@ -102,12 +143,41 @@ async function main() {
     positionMonitorRef = positionMonitor; // Store reference for graceful shutdown
     logger.success('✅ Position Monitor started! Monitoring for liquidations...');
 
+    if (
+      process.env.POSITION_MANAGER_IDRX_ADDRESS &&
+      process.env.MARKET_EXECUTOR_IDRX_ADDRESS &&
+      process.env.RISK_MANAGER_IDRX_ADDRESS
+    ) {
+      logger.info('?? Initializing Position Monitor (IDRX)...');
+      const positionMonitorIdrxInstance = new PositionMonitor(priceService, {
+        positionManagerAddress: process.env.POSITION_MANAGER_IDRX_ADDRESS,
+        marketExecutorAddress: process.env.MARKET_EXECUTOR_IDRX_ADDRESS,
+        riskManagerAddress: process.env.RISK_MANAGER_IDRX_ADDRESS,
+        collateralToken: 'IDRX',
+        label: 'IDRX',
+      });
+      positionMonitorIdrxInstance.start();
+      positionMonitorIdrxRef = positionMonitorIdrxInstance;
+      logger.success('? Position Monitor (IDRX) started! Monitoring for liquidations...');
+    }
+
     // Initialize Stability Fund streamer (periodic streamToVault)
     logger.info('dYZ_ Initializing Stability Fund streamer...');
     const stabilityFundStreamer = new StabilityFundStreamer();
     stabilityFundStreamer.start();
     stabilityFundStreamerRef = stabilityFundStreamer;
     logger.success('✅ Stability Fund streamer scheduled (streamToVault cron running)');
+
+    if (process.env.STABILITY_FUND_IDRX_ADDRESS) {
+      logger.info('dYZ_ Initializing Stability Fund streamer (IDRX)...');
+      const stabilityFundStreamerIdrxInstance = new StabilityFundStreamer({
+        stabilityFundAddress: process.env.STABILITY_FUND_IDRX_ADDRESS,
+        label: 'IDRX',
+      });
+      stabilityFundStreamerIdrxInstance.start();
+      stabilityFundStreamerIdrxRef = stabilityFundStreamerIdrxInstance;
+      logger.success('? Stability Fund streamer (IDRX) scheduled (streamToVault cron running)');
+    }
 
     // Check Price Signer status
     if (signerService.isInitialized()) {
@@ -229,7 +299,7 @@ async function main() {
     app.use('/api/relay', createRelayRoute(relayService));
     app.use('/api/limit-orders', createLimitOrderRoute(limitOrderService));
     app.use('/api/grid', createGridTradingRoute(gridTradingService));
-    app.use('/api/tpsl', createTPSLRoute(tpslMonitor));
+    app.use('/api/tpsl', createTPSLRoute(tpslMonitor, tpslMonitorIdrx || undefined));
     app.use('/api/tap-to-trade', createTapToTradeRoute(tapToTradeService));
     app.use('/api/one-tap', createOneTapProfitRoute(oneTapProfitService, oneTapProfitMonitor));
     app.use('/api/faucet', createFaucetRoute());
@@ -279,17 +349,30 @@ let tpslMonitorRef: any = null;
 let tapToTradeExecutorRef: any = null;
 let oneTapProfitMonitorRef: any = null;
 let stabilityFundStreamerRef: StabilityFundStreamer | null = null;
+let limitOrderExecutorIdrxRef: any = null;
+let positionMonitorIdrxRef: any = null;
+let tpslMonitorIdrxRef: TPSLMonitor | null = null;
+let stabilityFundStreamerIdrxRef: StabilityFundStreamer | null = null;
 
 process.on('SIGINT', () => {
   logger.info('Received SIGINT, shutting down gracefully...');
   if (limitOrderExecutorRef) {
     limitOrderExecutorRef.stop();
   }
+  if (limitOrderExecutorIdrxRef) {
+    limitOrderExecutorIdrxRef.stop();
+  }
   if (positionMonitorRef) {
     positionMonitorRef.stop();
   }
+  if (positionMonitorIdrxRef) {
+    positionMonitorIdrxRef.stop();
+  }
   if (tpslMonitorRef) {
     tpslMonitorRef.stop();
+  }
+  if (tpslMonitorIdrxRef) {
+    tpslMonitorIdrxRef.stop();
   }
   if (tapToTradeExecutorRef) {
     tapToTradeExecutorRef.stop();
@@ -299,6 +382,9 @@ process.on('SIGINT', () => {
   }
   if (stabilityFundStreamerRef) {
     stabilityFundStreamerRef.stop();
+  }
+  if (stabilityFundStreamerIdrxRef) {
+    stabilityFundStreamerIdrxRef.stop();
   }
   process.exit(0);
 });
@@ -308,11 +394,20 @@ process.on('SIGTERM', () => {
   if (limitOrderExecutorRef) {
     limitOrderExecutorRef.stop();
   }
+  if (limitOrderExecutorIdrxRef) {
+    limitOrderExecutorIdrxRef.stop();
+  }
   if (positionMonitorRef) {
     positionMonitorRef.stop();
   }
+  if (positionMonitorIdrxRef) {
+    positionMonitorIdrxRef.stop();
+  }
   if (tpslMonitorRef) {
     tpslMonitorRef.stop();
+  }
+  if (tpslMonitorIdrxRef) {
+    tpslMonitorIdrxRef.stop();
   }
   if (tapToTradeExecutorRef) {
     tapToTradeExecutorRef.stop();
@@ -322,6 +417,9 @@ process.on('SIGTERM', () => {
   }
   if (stabilityFundStreamerRef) {
     stabilityFundStreamerRef.stop();
+  }
+  if (stabilityFundStreamerIdrxRef) {
+    stabilityFundStreamerIdrxRef.stop();
   }
   process.exit(0);
 });

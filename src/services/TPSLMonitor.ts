@@ -11,6 +11,7 @@ import { TPSLConfig } from '../types';
 import PositionManagerABI from '../abis/PositionManager.json';
 import MarketExecutorABI from '../abis/MarketExecutor.json';
 import StabilityFundABI from '../abis/StabilityFund.json';
+import { CollateralToken, DEFAULT_COLLATERAL_TOKEN } from '../types/collateral';
 
 interface Position {
   id: bigint;
@@ -35,12 +36,27 @@ export class TPSLMonitor {
   private isRunning: boolean = false;
   private checkInterval: number = 2000; // Check every 2 seconds
   private currentPrices: Map<string, { price: bigint; timestamp: number }> = new Map();
+  private collateralToken: CollateralToken;
+  private stabilityFundAddress: string;
+  private vaultPoolAddress: string;
   
   // In-memory storage for TP/SL configs
   private tpslConfigs: Map<number, TPSLConfig> = new Map();
 
-  constructor(pythPriceService: any) {
-    this.logger = new Logger('TPSLMonitor');
+  constructor(
+    pythPriceService: any,
+    options?: {
+      positionManagerAddress?: string;
+      marketExecutorAddress?: string;
+      stabilityFundAddress?: string;
+      vaultPoolAddress?: string;
+      collateralToken?: CollateralToken;
+      label?: string;
+    }
+  ) {
+    const loggerLabel = options?.label ? `TPSLMonitor:${options.label}` : 'TPSLMonitor';
+    this.logger = new Logger(loggerLabel);
+    this.collateralToken = options?.collateralToken || DEFAULT_COLLATERAL_TOKEN;
 
     // Initialize provider
     const RPC_URL = process.env.RPC_URL || 'https://sepolia.base.org';
@@ -61,8 +77,13 @@ export class TPSLMonitor {
     this.priceSignerWallet = new ethers.Wallet(priceSignerKey);
 
     // Contract addresses
-    const positionManagerAddress = process.env.POSITION_MANAGER_ADDRESS || '';
-    const marketExecutorAddress = process.env.MARKET_EXECUTOR_ADDRESS || '';
+    const positionManagerAddress =
+      options?.positionManagerAddress || process.env.POSITION_MANAGER_ADDRESS || '';
+    const marketExecutorAddress =
+      options?.marketExecutorAddress || process.env.MARKET_EXECUTOR_ADDRESS || '';
+    this.stabilityFundAddress =
+      options?.stabilityFundAddress || process.env.STABILITY_FUND_ADDRESS || '';
+    this.vaultPoolAddress = options?.vaultPoolAddress || process.env.VAULT_POOL_ADDRESS || '';
 
     if (!positionManagerAddress || !marketExecutorAddress) {
       throw new Error('Contract addresses not configured');
@@ -110,6 +131,12 @@ export class TPSLMonitor {
     this.logger.info(`   Keeper: ${this.keeperWallet.address}`);
     this.logger.info(`   Position Manager: ${positionManagerAddress}`);
     this.logger.info(`   Market Executor: ${marketExecutorAddress}`);
+    if (this.stabilityFundAddress) {
+      this.logger.info(`   Stability Fund: ${this.stabilityFundAddress}`);
+    }
+    if (this.vaultPoolAddress) {
+      this.logger.info(`   Vault Pool: ${this.vaultPoolAddress}`);
+    }
   }
 
   /**
@@ -309,8 +336,8 @@ export class TPSLMonitor {
         return raw > 0n ? raw : 0n;
       })();
 
-      const stabilityFundAddress = process.env.STABILITY_FUND_ADDRESS || '';
-      const vaultPoolAddress = process.env.VAULT_POOL_ADDRESS || '';
+      const stabilityFundAddress = this.stabilityFundAddress;
+      const vaultPoolAddress = this.vaultPoolAddress;
       if (!stabilityFundAddress) {
         throw new Error('STABILITY_FUND_ADDRESS not configured');
       }

@@ -21,6 +21,7 @@ export function createLimitOrderRoute(limitOrderService: LimitOrderService) {
       takeProfit,
       stopLoss,
       metadata,
+      collateralToken,
     } = req.body ?? {};
 
     if (!trader || typeof trader !== 'string') {
@@ -83,6 +84,7 @@ export function createLimitOrderRoute(limitOrderService: LimitOrderService) {
       nonce: String(nonce),
       expiresAt: String(expiresAt),
       signature,
+      collateralToken,
       takeProfit: takeProfit ? String(takeProfit) : undefined,
       stopLoss: stopLoss ? String(stopLoss) : undefined,
       metadata,

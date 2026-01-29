@@ -2,8 +2,15 @@ import { Router, Request, Response } from 'express';
 import { TPSLMonitor } from '../services/TPSLMonitor';
 import { TPSLCreateRequest } from '../types';
 
-export function createTPSLRoute(tpslMonitor: TPSLMonitor): Router {
+export function createTPSLRoute(tpslMonitor: TPSLMonitor, tpslMonitorIdrx?: TPSLMonitor): Router {
   const router = Router();
+  const resolveMonitor = (token?: string) => {
+    if (token && token.toUpperCase() === 'IDRX' && tpslMonitorIdrx) {
+      return tpslMonitorIdrx;
+    }
+    return tpslMonitor;
+  };
+
 
   /**
    * Set or update TP/SL for a position
@@ -12,7 +19,7 @@ export function createTPSLRoute(tpslMonitor: TPSLMonitor): Router {
    */
   router.post('/set', async (req: Request, res: Response) => {
     try {
-      const { positionId, trader, takeProfit, stopLoss } = req.body;
+      const { positionId, trader, takeProfit, stopLoss, collateralToken } = req.body;
 
       // Validation
       if (!positionId || !trader) {
@@ -37,7 +44,7 @@ export function createTPSLRoute(tpslMonitor: TPSLMonitor): Router {
       const stopLossBigInt = stopLoss ? BigInt(Math.round(parseFloat(stopLoss) * 100000000)) : undefined;
 
       // Set TP/SL
-      const result = await tpslMonitor.setTPSL(
+      const result = await resolveMonitor(collateralToken).setTPSL(
         positionId,
         trader,
         takeProfitBigInt,
@@ -84,7 +91,8 @@ export function createTPSLRoute(tpslMonitor: TPSLMonitor): Router {
    */
   router.get('/all', (req: Request, res: Response) => {
     try {
-      const configs = tpslMonitor.getAllTPSL();
+      const { collateralToken } = req.query;
+      const configs = resolveMonitor(collateralToken as string | undefined).getAllTPSL();
 
       // Convert BigInt to string for JSON response
       const responseConfigs = configs.map(config => ({
@@ -127,7 +135,8 @@ export function createTPSLRoute(tpslMonitor: TPSLMonitor): Router {
         });
       }
 
-      const config = tpslMonitor.getTPSL(positionId);
+      const { collateralToken } = req.query;
+      const config = resolveMonitor(collateralToken as string | undefined).getTPSL(positionId);
 
       if (!config) {
         return res.status(404).json({
@@ -169,7 +178,7 @@ export function createTPSLRoute(tpslMonitor: TPSLMonitor): Router {
   router.delete('/:positionId', (req: Request, res: Response) => {
     try {
       const positionId = parseInt(req.params.positionId);
-      const { trader } = req.body;
+      const { trader, collateralToken } = req.body;
 
       if (isNaN(positionId)) {
         return res.status(400).json({
@@ -187,7 +196,7 @@ export function createTPSLRoute(tpslMonitor: TPSLMonitor): Router {
         });
       }
 
-      const result = tpslMonitor.deleteTPSL(positionId, trader);
+      const result = resolveMonitor(collateralToken).deleteTPSL(positionId, trader);
 
       if (!result.success) {
         return res.status(400).json({
@@ -219,7 +228,8 @@ export function createTPSLRoute(tpslMonitor: TPSLMonitor): Router {
    */
   router.get('/status', (req: Request, res: Response) => {
     try {
-      const status = tpslMonitor.getStatus();
+      const { collateralToken } = req.query;
+      const status = resolveMonitor(collateralToken as string | undefined).getStatus();
 
       res.json({
         success: true,

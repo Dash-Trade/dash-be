@@ -7,6 +7,7 @@ import {
   TapToTradeOrderStats,
 } from '../types/tapToTrade';
 import { SessionKeyValidator } from './SessionKeyValidator';
+import { CollateralToken, DEFAULT_COLLATERAL_TOKEN } from '../types/collateral';
 
 /**
  * TapToTradeService - Backend-Only Order Storage
@@ -42,7 +43,11 @@ export class TapToTradeService {
    */
   createOrder(params: CreateTapToTradeOrderRequest): TapToTradeOrder {
     // Validate signature before creating order
-    const marketExecutor = process.env.TAP_TO_TRADE_EXECUTOR_ADDRESS || '0x841f70066ba831650c4D97BD59cc001c890cf6b6';
+    const collateralToken = params.collateralToken || DEFAULT_COLLATERAL_TOKEN;
+    const marketExecutor =
+      collateralToken === 'IDRX' && process.env.TAP_TO_TRADE_EXECUTOR_IDRX_ADDRESS
+        ? process.env.TAP_TO_TRADE_EXECUTOR_IDRX_ADDRESS
+        : process.env.TAP_TO_TRADE_EXECUTOR_ADDRESS || '0x841f70066ba831650c4D97BD59cc001c890cf6b6';
 
     if (params.sessionKey) {
       // Validate with session key
@@ -101,6 +106,7 @@ export class TapToTradeService {
       nonce: params.nonce,
       signature: params.signature,
       sessionKey: params.sessionKey,
+      collateralToken,
       status: TapToTradeOrderStatus.PENDING,
       createdAt: Date.now(),
     };

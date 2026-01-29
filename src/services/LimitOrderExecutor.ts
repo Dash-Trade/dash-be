@@ -13,6 +13,7 @@ import { Logger } from '../utils/Logger';
 import LimitExecutorABI from '../abis/LimitExecutor.json';
 import { GridTradingService } from './GridTradingService';
 import { GridCell, GridCellStatus } from '../types/gridTrading';
+import { CollateralToken, DEFAULT_COLLATERAL_TOKEN } from '../types/collateral';
 
 interface PendingOrder {
   id: bigint;
@@ -44,17 +45,26 @@ export class LimitOrderExecutor {
   private lastCleanupTime: number = 0;
   private cleanupInterval: number = 30000; // Cleanup expired cells every 30 seconds
   private tradingPairAddress: string;
+  private collateralToken: CollateralToken;
 
   constructor(
     pythPriceService: any,
     gridService?: GridTradingService,
     tpslMonitor?: any,
-    limitOrderService?: any
+    limitOrderService?: any,
+    options?: {
+      limitExecutorAddress?: string;
+      positionManagerAddress?: string;
+      collateralToken?: CollateralToken;
+      label?: string;
+    }
   ) {
     this.gridService = gridService;
     this.tpslMonitor = tpslMonitor;
     this.limitOrderService = limitOrderService;
-    this.logger = new Logger('LimitOrderExecutor');
+    this.collateralToken = options?.collateralToken || DEFAULT_COLLATERAL_TOKEN;
+    const loggerLabel = options?.label ? `LimitOrderExecutor:${options.label}` : 'LimitOrderExecutor';
+    this.logger = new Logger(loggerLabel);
 
     // Initialize provider
     const RPC_URL = process.env.RPC_URL || 'https://sepolia.base.org';
@@ -76,7 +86,8 @@ export class LimitOrderExecutor {
     this.priceSignerAddress = this.priceSignerWallet.address;
 
     // LimitExecutor contract
-    this.limitExecutorAddress = process.env.LIMIT_EXECUTOR_ADDRESS || '';
+    this.limitExecutorAddress =
+      options?.limitExecutorAddress || process.env.LIMIT_EXECUTOR_ADDRESS || '';
     if (!this.limitExecutorAddress) {
       throw new Error('LIMIT_EXECUTOR_ADDRESS not configured');
     }
@@ -88,7 +99,8 @@ export class LimitOrderExecutor {
     );
 
     // PositionManager address for querying position IDs
-    this.tradingPairAddress = process.env.POSITION_MANAGER_ADDRESS || '';
+    this.tradingPairAddress =
+      options?.positionManagerAddress || process.env.POSITION_MANAGER_ADDRESS || '';
     if (!this.tradingPairAddress) {
       throw new Error('POSITION_MANAGER_ADDRESS not configured');
     }
@@ -541,7 +553,10 @@ export class LimitOrderExecutor {
   private async autoSetTPSLDirect(orderId: number, positionId: number, traderAddress: string) {
     try {
       // Check if this order has TP/SL preferences
-      const tpslData = this.limitOrderService.getOrderTPSL(orderId.toString());
+      const tpslData = this.limitOrderService.getOrderTPSL(
+        orderId.toString(),
+        this.collateralToken
+      );
       if (!tpslData || (!tpslData.takeProfit && !tpslData.stopLoss)) {
         this.logger.debug(`No TP/SL configured for order ${orderId}`);
         return;
@@ -566,7 +581,7 @@ export class LimitOrderExecutor {
       }
 
       // Clear stored TP/SL data after setting
-      this.limitOrderService.clearOrderTPSL(orderId.toString());
+      this.limitOrderService.clearOrderTPSL(orderId.toString(), this.collateralToken);
 
     } catch (error) {
       this.logger.error('Error in autoSetTPSLDirect:', error);
