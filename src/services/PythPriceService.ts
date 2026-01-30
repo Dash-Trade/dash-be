@@ -1,4 +1,5 @@
 import WebSocket from 'ws';
+import YahooFinance from 'yahoo-finance2';
 import { Logger } from '../utils/Logger';
 import { PriceData, MultiAssetPriceData, SUPPORTED_ASSETS, AssetConfig } from '../types';
 import { normalizePythPriceId, resolvePythAssetsFromEnv } from '../config/pythFeeds';
@@ -13,9 +14,18 @@ export class PythPriceService {
   private maxReconnectAttempts = 5;
   private assets: AssetConfig[] = [];
   private assetByFeedId: Map<string, AssetConfig> = new Map();
+  private yahooSymbols: Record<string, string> = {};
+  private yahooInterval: NodeJS.Timeout | null = null;
+  private yahooFinance: InstanceType<typeof YahooFinance>;
+  private readonly DEFAULT_YAHOO_SYMBOLS: Record<string, string> = {
+    IHSG: '^JKSE',
+    BBCA: 'BBCA.JK',
+    BBRI: 'BBRI.JK',
+  };
 
   constructor() {
     this.logger = new Logger('PythPriceService');
+    this.yahooFinance = new YahooFinance();
   }
 
   async initialize(): Promise<void> {
@@ -50,6 +60,10 @@ export class PythPriceService {
     
     // Connect to Pyth WebSocket
     this.connectPythWebSocket();
+
+    // Start Yahoo Finance polling for non-Pyth assets
+    this.yahooSymbols = this.resolveYahooSymbols(process.env);
+    this.startYahooPolling();
     
     this.logger.success('✅ Pyth Price Service initialized successfully');
   }
@@ -107,6 +121,105 @@ export class PythPriceService {
     } catch (error) {
       this.logger.error('Failed to connect to Pyth WebSocket:', error);
       this.attemptReconnect();
+    }
+  }
+
+  private resolveYahooSymbols(env: NodeJS.ProcessEnv): Record<string, string> {
+    const result: Record<string, string> = { ...this.DEFAULT_YAHOO_SYMBOLS };
+    const jsonKey = env['YAHOO_FEEDS'];
+    if (typeof jsonKey === 'string' && jsonKey.trim()) {
+      try {
+        const parsed = JSON.parse(jsonKey);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          for (const [symbol, yahooSymbol] of Object.entries(parsed as Record<string, unknown>)) {
+            if (typeof yahooSymbol === 'string' && yahooSymbol.trim()) {
+              result[symbol.trim().toUpperCase()] = yahooSymbol.trim();
+            }
+          }
+        } else {
+          this.logger.warn('YAHOO_FEEDS must be a JSON object like {"IHSG":"^JKSE"}');
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to parse YAHOO_FEEDS JSON: ${error instanceof Error ? error.message : 'unknown error'}`
+        );
+      }
+    }
+
+    for (const [key, value] of Object.entries(env)) {
+      if (!key.startsWith('YAHOO_FEED_')) continue;
+      const symbol = key.slice('YAHOO_FEED_'.length).trim().toUpperCase();
+      if (!symbol) continue;
+      const yahooSymbol = typeof value === 'string' ? value.trim() : '';
+      if (!yahooSymbol) continue;
+      result[symbol] = yahooSymbol;
+    }
+
+    if (Object.keys(result).length > 0) {
+      this.logger.info(`📊 Yahoo Finance feeds enabled: ${Object.keys(result).join(', ')}`);
+    }
+    return result;
+  }
+
+  private startYahooPolling(): void {
+    const symbols = Object.keys(this.yahooSymbols);
+    if (symbols.length === 0) return;
+
+    this.fetchYahooPrices();
+
+    if (this.yahooInterval) {
+      clearInterval(this.yahooInterval);
+    }
+    this.yahooInterval = setInterval(() => this.fetchYahooPrices(), 15000);
+  }
+
+  private async fetchYahooPrices(): Promise<void> {
+    const entries = Object.entries(this.yahooSymbols);
+    if (entries.length === 0) return;
+
+    try {
+      const now = Date.now();
+      let updated = false;
+      const yahooSymbols = entries.map(([, yahooSymbol]) => yahooSymbol);
+      const quoteResult = await this.yahooFinance.quote(yahooSymbols, { return: 'object' });
+
+      for (const [symbol, yahooSymbol] of entries) {
+        let quote: any = quoteResult?.[yahooSymbol];
+        if (!quote && Array.isArray(quoteResult)) {
+          quote = quoteResult.find((item: any) => item?.symbol === yahooSymbol);
+        }
+        if (!quote) continue;
+
+        const price = Number(
+          quote?.regularMarketPrice ?? quote?.postMarketPrice ?? quote?.preMarketPrice
+        );
+        if (!Number.isFinite(price)) continue;
+
+        const marketTime = Number(
+          quote?.regularMarketTime ?? quote?.postMarketTime ?? quote?.preMarketTime
+        );
+        let timestamp = now;
+        if (Number.isFinite(marketTime) && marketTime > 0) {
+          // Yahoo provides seconds; normalize to milliseconds
+          timestamp = marketTime > 1e12 ? marketTime : marketTime * 1000;
+        }
+
+        this.currentPrices[symbol] = {
+          symbol,
+          price,
+          timestamp,
+          source: 'yahoo',
+          publishTime: timestamp,
+        };
+        updated = true;
+      }
+
+      if (updated) {
+        this.notifyPriceUpdate();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Yahoo price fetch error: ${message}`);
     }
   }
 
@@ -250,6 +363,11 @@ export class PythPriceService {
     if (this.pythWs) {
       this.pythWs.close();
       this.pythWs = null;
+    }
+
+    if (this.yahooInterval) {
+      clearInterval(this.yahooInterval);
+      this.yahooInterval = null;
     }
     
     this.priceUpdateCallbacks = [];

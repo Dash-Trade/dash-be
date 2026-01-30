@@ -4,7 +4,7 @@ export interface PriceData {
   confidence?: number;
   expo?: number;
   timestamp: number;
-  source: 'pyth' | 'binance' | 'fallback' | 'frontend';
+  source: 'pyth' | 'binance' | 'fallback' | 'frontend' | 'yahoo';
   publishTime?: number;
 }
 
