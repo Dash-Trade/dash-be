@@ -35,8 +35,12 @@ export class PositionMonitor {
   private riskManager: Contract;
   private isRunning: boolean = false;
   private checkInterval: number = 1000;
+  private rateLimitBackoffMs = 0;
+  private lastRateLimitAt = 0;
   private currentPrices: Map<string, { price: bigint; timestamp: number }> = new Map();
   private collateralToken: CollateralToken;
+  private lastContractCheckAt = 0;
+  private contractHealthy: boolean | null = null;
 
   constructor(
     pythPriceService: any,
@@ -69,6 +73,12 @@ export class PositionMonitor {
       throw new Error('RELAY_PRIVATE_KEY not configured for price signing');
     }
     this.priceSignerWallet = new ethers.Wallet(priceSignerKey);
+
+    // Polling interval (ms)
+    const intervalFromEnv = Number(process.env.POSITION_MONITOR_INTERVAL_MS);
+    if (!Number.isNaN(intervalFromEnv) && intervalFromEnv > 0) {
+      this.checkInterval = intervalFromEnv;
+    }
 
     // Contract addresses
     const positionManagerAddress =
@@ -131,6 +141,7 @@ export class PositionMonitor {
     this.logger.info(`   Position Manager: ${positionManagerAddress}`);
     this.logger.info(`   Market Executor: ${marketExecutorAddress}`);
     this.logger.info(`   Risk Manager: ${riskManagerAddress}`);
+    this.logger.info(`   Poll Interval: ${this.checkInterval}ms`);
   }
 
   /**
@@ -160,14 +171,21 @@ export class PositionMonitor {
    */
   private async monitorLoop() {
     while (this.isRunning) {
+      const now = Date.now();
+      if (this.rateLimitBackoffMs > 0 && now - this.lastRateLimitAt < this.rateLimitBackoffMs) {
+        await this.sleep(this.rateLimitBackoffMs);
+        continue;
+      }
+
       try {
         await this.checkAllPositions();
       } catch (error) {
         this.logger.error('Error in monitor loop:', error);
       }
 
-      // Wait before next check
-      await this.sleep(this.checkInterval);
+      // Wait before next check (includes backoff if needed)
+      const delay = this.checkInterval + this.rateLimitBackoffMs;
+      await this.sleep(delay);
     }
   }
 
@@ -176,6 +194,11 @@ export class PositionMonitor {
    */
   private async checkAllPositions() {
     try {
+      const canCheck = await this.ensurePositionManagerReady();
+      if (!canCheck) {
+        return;
+      }
+
       // Get next position ID
       const nextPositionId = await this.positionManager.nextPositionId();
       const totalPositions = Number(nextPositionId) - 1;
@@ -207,9 +230,70 @@ export class PositionMonitor {
         }
       }
 
+      if (this.rateLimitBackoffMs > 0) {
+        this.rateLimitBackoffMs = Math.max(0, this.rateLimitBackoffMs - 1000);
+      }
     } catch (error) {
+      if (this.isRateLimitError(error)) {
+        this.applyRateLimitBackoff();
+        this.logger.warn('RPC rate limited while scanning positions. Backing off...', {
+          backoffMs: this.rateLimitBackoffMs
+        });
+        return;
+      }
       this.logger.error('Error checking all positions:', error);
     }
+  }
+
+  private async ensurePositionManagerReady() {
+    const now = Date.now();
+    const retryMs = this.contractHealthy ? 60000 : 15000;
+    if (now - this.lastContractCheckAt < retryMs && this.contractHealthy !== null) {
+      return this.contractHealthy;
+    }
+
+    this.lastContractCheckAt = now;
+    try {
+      const target = (this.positionManager?.target || '') as string;
+      if (!target) {
+        this.contractHealthy = false;
+        this.logger.error('PositionManager address not configured');
+        return false;
+      }
+      const code = await this.provider.getCode(target);
+      const hasCode = !!code && code !== '0x';
+      this.contractHealthy = hasCode;
+      if (!hasCode) {
+        this.logger.error(
+          `PositionManager has no code at ${target}. Check RPC_URL/addresses.`,
+        );
+      }
+      return hasCode;
+    } catch (error) {
+      this.contractHealthy = false;
+      this.logger.error('Failed to validate PositionManager contract:', error);
+      return false;
+    }
+  }
+
+  private isRateLimitError(error: any) {
+    if (!error) return false;
+    const msg = error?.message?.toLowerCase?.() || '';
+    const infoMsg = error?.info?.error?.message?.toLowerCase?.() || '';
+    const code = error?.info?.error?.code || error?.code;
+    return (
+      msg.includes('rate limit') ||
+      msg.includes('over rate limit') ||
+      infoMsg.includes('rate limit') ||
+      infoMsg.includes('over rate limit') ||
+      code === -32016
+    );
+  }
+
+  private applyRateLimitBackoff() {
+    const base = this.rateLimitBackoffMs > 0 ? this.rateLimitBackoffMs * 2 : 5000;
+    this.rateLimitBackoffMs = Math.min(base, 60000);
+    this.lastRateLimitAt = Date.now();
   }
 
   /**

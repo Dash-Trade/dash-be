@@ -187,10 +187,14 @@ async function main() {
     }
 
     // Check Relay Service status
-    const relayBalance = await relayService.getRelayBalance();
-    logger.success(`✅ Relay Service ready: ${relayBalance.ethFormatted} ETH`);
-    if (parseFloat(relayBalance.ethFormatted) < 0.01) {
-      logger.warn('⚠️  Relay wallet has low ETH balance! Please fund for gasless transactions.');
+    try {
+      const relayBalance = await relayService.getRelayBalance();
+      logger.success(`✅ Relay Service ready: ${relayBalance.ethFormatted} ETH`);
+      if (parseFloat(relayBalance.ethFormatted) < 0.01) {
+        logger.warn('⚠️  Relay wallet has low ETH balance! Please fund for gasless transactions.');
+      }
+    } catch (error) {
+      logger.warn('⚠️  Relay Service balance check failed (RPC may be rate limited). Continuing startup.', error);
     }
 
     // Create HTTP server for both Express and WebSocket

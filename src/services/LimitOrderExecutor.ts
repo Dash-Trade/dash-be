@@ -38,6 +38,10 @@ export class LimitOrderExecutor {
   private priceSignerWallet: ethers.Wallet;
   private isRunning: boolean = false;
   private checkInterval: number = 5000; // Check every 5 seconds
+  private rateLimitBackoffMs = 0;
+  private lastRateLimitAt = 0;
+  private lastContractCheckAt = 0;
+  private contractHealthy: boolean | null = null;
   private currentPrices: Map<string, { price: bigint; timestamp: number }> = new Map();
   private gridService?: GridTradingService; // Optional grid trading service
   private tpslMonitor?: any; // TPSLMonitor for auto-setting TP/SL
@@ -69,6 +73,11 @@ export class LimitOrderExecutor {
     // Initialize provider
     const RPC_URL = process.env.RPC_URL || 'https://sepolia.base.org';
     this.provider = new ethers.JsonRpcProvider(RPC_URL);
+
+    const intervalFromEnv = Number(process.env.LIMIT_ORDER_INTERVAL_MS);
+    if (!Number.isNaN(intervalFromEnv) && intervalFromEnv > 0) {
+      this.checkInterval = intervalFromEnv;
+    }
 
     // Keeper wallet (executes orders)
     const keeperPrivateKey = process.env.RELAY_PRIVATE_KEY;
@@ -136,6 +145,7 @@ export class LimitOrderExecutor {
     this.logger.info(`   Keeper: ${this.keeperWallet.address}`);
     this.logger.info(`   Price Signer: ${this.priceSignerAddress}`);
     this.logger.info(`   LimitExecutor: ${this.limitExecutorAddress}`);
+    this.logger.info(`   Poll Interval: ${this.checkInterval}ms`);
   }
 
   /**
@@ -165,6 +175,11 @@ export class LimitOrderExecutor {
    */
   private async monitorLoop() {
     while (this.isRunning) {
+      if (this.rateLimitBackoffMs > 0 && Date.now() - this.lastRateLimitAt < this.rateLimitBackoffMs) {
+        await this.sleep(this.rateLimitBackoffMs);
+        continue;
+      }
+
       try {
         await this.checkAndExecuteOrders();
 
@@ -177,8 +192,9 @@ export class LimitOrderExecutor {
         this.logger.error('Error in monitor loop:', error);
       }
 
-      // Wait before next check
-      await this.sleep(this.checkInterval);
+      // Wait before next check (includes backoff if needed)
+      const delay = this.checkInterval + this.rateLimitBackoffMs;
+      await this.sleep(delay);
     }
   }
 
@@ -249,6 +265,11 @@ export class LimitOrderExecutor {
    */
   private async checkAndExecuteOrders() {
     try {
+      const ready = await this.ensureLimitExecutorReady();
+      if (!ready) {
+        return;
+      }
+
       // Get all pending orders (you might want to implement getUserPendingOrders for all users)
       // For now, we'll use a workaround: check nextOrderId and query each
       const nextOrderId = await this.limitExecutor.nextOrderId();
@@ -350,9 +371,83 @@ export class LimitOrderExecutor {
         }
       }
 
+      if (this.rateLimitBackoffMs > 0) {
+        this.rateLimitBackoffMs = Math.max(0, this.rateLimitBackoffMs - 1000);
+      }
     } catch (error) {
+      if (this.isRateLimitError(error)) {
+        this.applyRateLimitBackoff();
+        this.logger.warn('RPC rate limited while checking orders. Backing off...', {
+          backoffMs: this.rateLimitBackoffMs
+        });
+        return;
+      }
+      if (this.isMissingRevertData(error)) {
+        this.applyRateLimitBackoff();
+        this.logger.warn('RPC returned empty data while checking orders. Backing off...', {
+          backoffMs: this.rateLimitBackoffMs
+        });
+        return;
+      }
       this.logger.error('Error checking orders:', error);
     }
+  }
+
+  private async ensureLimitExecutorReady() {
+    const now = Date.now();
+    const retryMs = this.contractHealthy ? 60000 : 15000;
+    if (now - this.lastContractCheckAt < retryMs && this.contractHealthy !== null) {
+      return this.contractHealthy;
+    }
+
+    this.lastContractCheckAt = now;
+    try {
+      const target = this.limitExecutor.target?.toString?.() || this.limitExecutorAddress;
+      const code = await this.provider.getCode(target);
+      const hasCode = !!code && code !== '0x';
+      this.contractHealthy = hasCode;
+      if (!hasCode) {
+        this.logger.error(`LimitExecutor has no code at ${target}. Check RPC_URL/addresses.`);
+      }
+      return hasCode;
+    } catch (error) {
+      if (this.isRateLimitError(error)) {
+        this.applyRateLimitBackoff();
+        this.logger.warn('RPC rate limited while validating LimitExecutor. Backing off...', {
+          backoffMs: this.rateLimitBackoffMs
+        });
+      } else {
+        this.logger.error('Failed to validate LimitExecutor contract:', error);
+      }
+      this.contractHealthy = false;
+      return false;
+    }
+  }
+
+  private isRateLimitError(error: any) {
+    if (!error) return false;
+    const msg = error?.message?.toLowerCase?.() || '';
+    const infoMsg = error?.info?.error?.message?.toLowerCase?.() || '';
+    const code = error?.info?.error?.code || error?.code;
+    return (
+      msg.includes('rate limit') ||
+      msg.includes('over rate limit') ||
+      infoMsg.includes('rate limit') ||
+      infoMsg.includes('over rate limit') ||
+      code === -32016
+    );
+  }
+
+  private isMissingRevertData(error: any) {
+    if (!error) return false;
+    const msg = error?.message?.toLowerCase?.() || '';
+    return msg.includes('missing revert data') || msg.includes('call_exception');
+  }
+
+  private applyRateLimitBackoff() {
+    const base = this.rateLimitBackoffMs > 0 ? this.rateLimitBackoffMs * 2 : 5000;
+    this.rateLimitBackoffMs = Math.min(base, 60000);
+    this.lastRateLimitAt = Date.now();
   }
 
   /**

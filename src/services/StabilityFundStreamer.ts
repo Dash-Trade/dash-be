@@ -20,6 +20,8 @@ export class StabilityFundStreamer {
   private intervalId?: NodeJS.Timeout;
   private isRunning = false;
   private isStreaming = false;
+  private rateLimitBackoffMs = 0;
+  private lastRateLimitAt = 0;
 
   constructor(options?: { stabilityFundAddress?: string; label?: string }) {
     const loggerLabel = options?.label ? `StabilityFundStreamer:${options.label}` : 'StabilityFundStreamer';
@@ -118,6 +120,14 @@ export class StabilityFundStreamer {
       return;
     }
 
+    if (this.rateLimitBackoffMs > 0 && Date.now() - this.lastRateLimitAt < this.rateLimitBackoffMs) {
+      this.logger.warn('RPC rate limited recently, skipping streamToVault', {
+        trigger,
+        backoffMs: this.rateLimitBackoffMs
+      });
+      return;
+    }
+
     this.isStreaming = true;
     try {
       const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
@@ -137,7 +147,16 @@ export class StabilityFundStreamer {
           return;
         }
       } catch (error) {
-        this.logger.warn('Could not read stream interval, proceeding anyway', error);
+        if (this.isRateLimitError(error)) {
+          this.applyRateLimitBackoff();
+          this.logger.warn('RPC rate limited while reading stream interval', {
+            trigger,
+            backoffMs: this.rateLimitBackoffMs
+          });
+          return;
+        }
+        this.logger.warn('Could not read stream interval, skipping streamToVault', error);
+        return;
       }
 
       const balance = await this.getStabilityFundBalance();
@@ -168,7 +187,18 @@ export class StabilityFundStreamer {
         txHash: receipt.hash,
         gasUsed: receipt.gasUsed?.toString()
       });
+      if (this.rateLimitBackoffMs > 0) {
+        this.rateLimitBackoffMs = Math.max(0, this.rateLimitBackoffMs - 1000);
+      }
     } catch (error: any) {
+      if (this.isRateLimitError(error)) {
+        this.applyRateLimitBackoff();
+        this.logger.warn('RPC rate limited during streamToVault. Backing off...', {
+          trigger,
+          backoffMs: this.rateLimitBackoffMs
+        });
+        return;
+      }
       this.logger.error('Failed to stream to vault', error);
       if (this.isNonceError(error)) {
         await this.tryResyncNonce();
@@ -210,9 +240,36 @@ export class StabilityFundStreamer {
       const balance: bigint = await this.usdcToken.balanceOf(fundAddress);
       return balance;
     } catch (error) {
+      if (this.isRateLimitError(error)) {
+        this.applyRateLimitBackoff();
+        this.logger.warn('RPC rate limited while reading StabilityFund balance', {
+          backoffMs: this.rateLimitBackoffMs
+        });
+        return null;
+      }
       this.logger.warn('Could not read StabilityFund collateral balance', error);
       return null;
     }
+  }
+
+  private isRateLimitError(error: any) {
+    if (!error) return false;
+    const msg = error?.message?.toLowerCase?.() || '';
+    const infoMsg = error?.info?.error?.message?.toLowerCase?.() || '';
+    const code = error?.info?.error?.code || error?.code;
+    return (
+      msg.includes('rate limit') ||
+      msg.includes('over rate limit') ||
+      infoMsg.includes('rate limit') ||
+      infoMsg.includes('over rate limit') ||
+      code === -32016
+    );
+  }
+
+  private applyRateLimitBackoff() {
+    const base = this.rateLimitBackoffMs > 0 ? this.rateLimitBackoffMs * 2 : 5000;
+    this.rateLimitBackoffMs = Math.min(base, 60000);
+    this.lastRateLimitAt = Date.now();
   }
 
   private isNonceError(err: any): boolean {

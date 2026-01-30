@@ -19,6 +19,7 @@ export class RelayService {
   private provider: ethers.JsonRpcProvider;
   private relayWallet: ethers.Wallet;
   private paymasterContract: Contract;
+  private requirePaymasterDeposit: boolean;
   
   // Contract addresses (from .env)
   private PAYMASTER_ADDRESS: string;
@@ -61,6 +62,9 @@ export class RelayService {
     if (!this.PAYMASTER_ADDRESS || !this.MARKET_EXECUTOR_ADDRESS || !this.LIMIT_EXECUTOR_ADDRESS || !this.POSITION_MANAGER_ADDRESS) {
       throw new Error('Contract addresses not configured');
     }
+
+    const requireDeposit = (process.env.RELAY_REQUIRE_PAYMASTER || 'false').toLowerCase() === 'true';
+    this.requirePaymasterDeposit = requireDeposit;
     
     // Initialize paymaster contract
     const paymasterABI = [
@@ -219,9 +223,13 @@ export class RelayService {
       this.logger.info(`⛽ Estimated gas: ${gasEstimate.toString()}`);
       
       // Check if user can pay
-      const canPay = await this.canUserPayGas(userAddress, gasEstimate);
-      if (!canPay) {
-        throw new Error('User has insufficient USDC deposit for gas');
+      if (this.requirePaymasterDeposit) {
+        const canPay = await this.canUserPayGas(userAddress, gasEstimate);
+        if (!canPay) {
+          throw new Error('User has insufficient USDC deposit for gas');
+        }
+      } else {
+        this.logger.warn('Paymaster deposit check disabled (RELAY_REQUIRE_PAYMASTER=false)');
       }
       
       // Calculate USDC cost
