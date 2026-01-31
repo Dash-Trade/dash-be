@@ -25,6 +25,8 @@ const USDC_FAUCET_AMOUNT = '10';
 const IDRX_FAUCET_AMOUNT = '100000';
 const faucetClaims = new Map<string, number>();
 let faucetQueue: Promise<void> = Promise.resolve();
+const isReceiptSuccess = (status: unknown): boolean =>
+  status === 'success' || status === 1 || status === 1n;
 
 const formatCooldown = (ms: number): string => {
   const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
@@ -98,7 +100,10 @@ export function createFaucetRoute(): Router {
         const usdcAddress = process.env.USDC_TOKEN_ADDRESS;
         const idrxAddress = process.env.IDRX_TOKEN_ADDRESS;
         const faucetPrivateKey = process.env.RELAY_PRIVATE_KEY || process.env.FAUCET_PRIVATE_KEY;
-        const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL || 'https://sepolia.base.org';
+        const rpcUrl =
+          process.env.RPC_URL ||
+          process.env.NEXT_PUBLIC_RPC_URL ||
+          'https://sepolia.base.org';
 
         if (!faucetPrivateKey) {
           logger.error('RELAY_PRIVATE_KEY/FAUCET_PRIVATE_KEY not configured in environment');
@@ -170,6 +175,10 @@ export function createFaucetRoute(): Router {
           hash: usdcHash,
           confirmations: 1
         });
+        if (!isReceiptSuccess(usdcReceipt.status)) {
+          logger.error('USDC mint reverted', { txHash: usdcHash, status: usdcReceipt.status });
+          throw new Error(`USDC mint reverted: ${usdcHash}`);
+        }
 
         // Mint IDRX
         const idrxHash = await walletClient.writeContract({
@@ -186,6 +195,10 @@ export function createFaucetRoute(): Router {
           hash: idrxHash,
           confirmations: 1
         });
+        if (!isReceiptSuccess(idrxReceipt.status)) {
+          logger.error('IDRX mint reverted', { txHash: idrxHash, status: idrxReceipt.status });
+          throw new Error(`IDRX mint reverted: ${idrxHash}`);
+        }
 
         faucetClaims.set(addressKey, now);
 
@@ -254,7 +267,10 @@ export function createFaucetRoute(): Router {
       }
 
       const account = privateKeyToAccount(faucetPrivateKey as `0x${string}`);
-      const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL || 'https://sepolia.base.org';
+      const rpcUrl =
+        process.env.RPC_URL ||
+        process.env.NEXT_PUBLIC_RPC_URL ||
+        'https://sepolia.base.org';
 
       const publicClient = createPublicClient({
         chain: baseSepolia,
